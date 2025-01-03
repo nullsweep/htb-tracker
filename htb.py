@@ -6,7 +6,7 @@ from datetime import datetime
 
 st.title("HTB Machine Helper")
 
-menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Notes", "Enumeration Results", "Automation Scripts", "Export Data", "Save HTML Report"])
+menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Notes", "Enumeration Results", "Automation Scripts", "Export Data", "Save HTML Report", "Gobuster Scanner"])
 
 if 'machines' not in st.session_state:
     st.session_state['machines'] = {}
