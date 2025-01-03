@@ -93,6 +93,33 @@ elif menu == "Nmap Scanner":
         else:
             st.error("Please provide a target IP address.")
 
+elif menu == "Gobuster Scanner":
+    st.header("Gobuster Scanner")
+
+    target_url = st.text_input("Target URL (e.g., http://example.com)")
+    wordlist = st.text_input("Wordlist Path (e.g., /usr/share/wordlists/dirb/common.txt)")
+    extensions = st.text_input("File Extensions (comma-separated, e.g., php,html,txt)")
+    threads = st.number_input("Number of Threads", min_value=1, max_value=100, value=10, step=1)
+    output_file = st.text_input("Output File (Optional, e.g., gobuster_output.txt)")
+
+    if st.button("Run Gobuster Scan"):
+        if target_url and wordlist:
+            try:
+                cmd = ["gobuster", "dir", "-u", target_url, "-w", wordlist, "-t", str(threads)]
+                
+                if extensions:
+                    cmd.extend(["-x", extensions])
+                if output_file:
+                    cmd.extend(["-o", output_file])
+
+                with st.spinner("Running Gobuster Scan..."):
+                    result = subprocess.check_output(cmd, text=True)
+                st.text_area("Scan Results", result, height=300)
+            except Exception as e:
+                st.error(f"Error running Gobuster: {e}")
+        else:
+            st.error("Please provide both a Target URL and Wordlist Path.")
+
 elif menu == "Notes":
     st.header("Machine Notes")
 
