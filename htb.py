@@ -6,7 +6,7 @@ from datetime import datetime
 
 st.title("HTB Machine Helper")
 
-menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Notes", "Enumeration Results", "Automation Scripts", "Export Data", "Save HTML Report", "Gobuster Scanner"])
+menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Gobuster Scanner", "Notes", "Enumeration Results", "Automation Scripts", "Export Data", "Save HTML Report"])
 
 if 'machines' not in st.session_state:
     st.session_state['machines'] = {}
@@ -81,6 +81,7 @@ elif menu == "Nmap Scanner":
 
     target_ip = st.text_input("Target IP Address")
     scan_options = st.text_area("Nmap Options", "-sC -sV -p- -T4")
+    selected_machine = st.selectbox("Select Machine", st.session_state['machines'].keys(), index=0)
 
     if st.button("Run Nmap Scan"):
         if target_ip:
@@ -88,6 +89,14 @@ elif menu == "Nmap Scanner":
                 try:
                     result = subprocess.check_output(["nmap"] + scan_options.split() + [target_ip], text=True)
                     st.text_area("Scan Results", result, height=300)
+
+                    # Save results to enumeration section
+                    if selected_machine in st.session_state['machines']:
+                        st.session_state['machines'][selected_machine]["Enumeration Results"] = \
+                            st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
+                            f"\n\nNmap Results:\n{result}"
+                        save_data_to_file()
+                        st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
                 except Exception as e:
                     st.error(f"Error running Nmap: {e}")
         else:
@@ -100,21 +109,26 @@ elif menu == "Gobuster Scanner":
     wordlist = st.text_input("Wordlist Path (e.g., /usr/share/wordlists/dirb/common.txt)")
     extensions = st.text_input("File Extensions (comma-separated, e.g., php,html,txt)")
     threads = st.number_input("Number of Threads", min_value=1, max_value=100, value=10, step=1)
-    output_file = st.text_input("Output File (Optional, e.g., gobuster_output.txt)")
+    selected_machine = st.selectbox("Select Machine", st.session_state['machines'].keys(), index=0)
 
     if st.button("Run Gobuster Scan"):
         if target_url and wordlist:
             try:
                 cmd = ["gobuster", "dir", "-u", target_url, "-w", wordlist, "-t", str(threads)]
-                
                 if extensions:
                     cmd.extend(["-x", extensions])
-                if output_file:
-                    cmd.extend(["-o", output_file])
 
                 with st.spinner("Running Gobuster Scan..."):
                     result = subprocess.check_output(cmd, text=True)
                 st.text_area("Scan Results", result, height=300)
+
+                # Save results to enumeration section
+                if selected_machine in st.session_state['machines']:
+                    st.session_state['machines'][selected_machine]["Enumeration Results"] = \
+                        st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
+                        f"\n\nGobuster Results:\n{result}"
+                    save_data_to_file()
+                    st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
             except Exception as e:
                 st.error(f"Error running Gobuster: {e}")
         else:
