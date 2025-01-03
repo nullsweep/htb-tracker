@@ -3,6 +3,7 @@ import subprocess
 import os
 import json
 from datetime import datetime
+import re 
 
 st.title("HTB Machine Helper")
 
@@ -10,6 +11,10 @@ menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Go
 
 if 'machines' not in st.session_state:
     st.session_state['machines'] = {}
+
+def clean_ansi_codes(output):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', output)
 
 def save_data_to_file():
     with open("machines_data.json", "w") as file:
@@ -88,13 +93,13 @@ elif menu == "Nmap Scanner":
             with st.spinner("Running Nmap Scan..."):
                 try:
                     result = subprocess.check_output(["nmap"] + scan_options.split() + [target_ip], text=True)
-                    st.text_area("Scan Results", result, height=300)
+                    clean_result = clean_ansi_codes(result)
+                    st.text_area("Scan Results", clean_result, height=300)
 
-                    # Save results to enumeration section
                     if selected_machine in st.session_state['machines']:
                         st.session_state['machines'][selected_machine]["Enumeration Results"] = \
                             st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
-                            f"\n\nNmap Results:\n{result}"
+                            f"\n\nNmap Results:\n{clean_result}"
                         save_data_to_file()
                         st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
                 except Exception as e:
@@ -120,19 +125,20 @@ elif menu == "Gobuster Scanner":
 
                 with st.spinner("Running Gobuster Scan..."):
                     result = subprocess.check_output(cmd, text=True)
-                st.text_area("Scan Results", result, height=300)
+                clean_result = clean_ansi_codes(result)
+                st.text_area("Scan Results", clean_result, height=300)
 
-                # Save results to enumeration section
                 if selected_machine in st.session_state['machines']:
                     st.session_state['machines'][selected_machine]["Enumeration Results"] = \
                         st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
-                        f"\n\nGobuster Results:\n{result}"
+                        f"\n\nGobuster Results:\n{clean_result}"
                     save_data_to_file()
                     st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
             except Exception as e:
                 st.error(f"Error running Gobuster: {e}")
         else:
             st.error("Please provide both a Target URL and Wordlist Path.")
+
 
 elif menu == "Notes":
     st.header("Machine Notes")
