@@ -1,220 +1,538 @@
 import streamlit as st
-import subprocess
+import socket
+import threading
+import requests
+import time
+import pandas as pd
+import ssl
+import dns.resolver  # Requires dnspython: pip install dnspython
 import os
-import json
-from datetime import datetime
-import re 
+import glob
 
-st.title("HTB Machine Helper")
+# =============================================================================
+# Utility: Reporting Functionality
+# =============================================================================
+def init_report():
+    if "report" not in st.session_state:
+        st.session_state["report"] = []
 
-menu = st.sidebar.radio("Select an Option", ["Machine Info", "Nmap Scanner", "Gobuster Scanner", "Notes", "Enumeration Results", "Automation Scripts", "Export Data", "Save HTML Report"])
-
-if 'machines' not in st.session_state:
-    st.session_state['machines'] = {}
-
-def clean_ansi_codes(output):
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi_escape.sub('', output)
-
-def save_data_to_file():
-    with open("machines_data.json", "w") as file:
-        json.dump(st.session_state['machines'], file)
-
-def load_data_from_file():
-    if os.path.exists("machines_data.json"):
-        with open("machines_data.json", "r") as file:
-            st.session_state['machines'] = json.load(file)
-
-def generate_html_report():
-    html_content = """<html>
-    <head>
-        <title>HTB Machine Report</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            h1 { color: #2c3e50; }
-            h2 { color: #34495e; }
-            ul { list-style-type: none; padding: 0; }
-            li { margin: 5px 0; }
-            .machine { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background: #f9f9f9; }
-            .key { font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <h1>HTB Machine Report</h1>"""
-
-    for name, details in st.session_state['machines'].items():
-        html_content += f"<div class='machine'>"
-        html_content += f"<h2>{name}</h2>"
-        html_content += "<ul>"
-        for key, value in details.items():
-            html_content += f"<li><span class='key'>{key}:</span> {value}</li>"
-        html_content += "</ul>"
-        html_content += "</div>"
-
-    html_content += "</body></html>"
-    return html_content
-
-load_data_from_file()
-
-if menu == "Machine Info":
-    st.header("Add or Update Machine Info")
-
-    machine_name = st.text_input("Machine Name")
-    ip_address = st.text_input("IP Address")
-    difficulty = st.selectbox("Difficulty", ["Easy", "Medium", "Hard", "Insane"])
-    status = st.selectbox("Status", ["Not Started", "In Progress", "Completed"])
-
-    if st.button("Save Machine"):
-        if machine_name and ip_address:
-            st.session_state['machines'][machine_name] = {
-                "IP Address": ip_address,
-                "Difficulty": difficulty,
-                "Status": status,
-                "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            save_data_to_file()
-            st.success(f"Saved information for {machine_name}.")
-        else:
-            st.error("Please fill in both the Machine Name and IP Address.")
-
-    st.header("Current Machines")
-    for name, details in st.session_state['machines'].items():
-        st.write(f"**{name}** - {details}")
-
-elif menu == "Nmap Scanner":
-    st.header("Nmap Scanner")
-
-    target_ip = st.text_input("Target IP Address")
-    scan_options = st.text_area("Nmap Options", "-sC -sV -p- -T4")
-    selected_machine = st.selectbox("Select Machine", st.session_state['machines'].keys(), index=0)
-
-    if st.button("Run Nmap Scan"):
-        if target_ip:
-            with st.spinner("Running Nmap Scan..."):
-                try:
-                    result = subprocess.check_output(["nmap"] + scan_options.split() + [target_ip], text=True)
-                    clean_result = clean_ansi_codes(result)
-                    st.text_area("Scan Results", clean_result, height=300)
-
-                    if selected_machine in st.session_state['machines']:
-                        st.session_state['machines'][selected_machine]["Enumeration Results"] = \
-                            st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
-                            f"\n\nNmap Results:\n{clean_result}"
-                        save_data_to_file()
-                        st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
-                except Exception as e:
-                    st.error(f"Error running Nmap: {e}")
-        else:
-            st.error("Please provide a target IP address.")
-
-elif menu == "Gobuster Scanner":
-    st.header("Gobuster Scanner")
-
-    target_url = st.text_input("Target URL (e.g., http://example.com)")
-    wordlist = st.text_input("Wordlist Path (e.g., /usr/share/wordlists/dirb/common.txt)")
-    extensions = st.text_input("File Extensions (comma-separated, e.g., php,html,txt)")
-    threads = st.number_input("Number of Threads", min_value=1, max_value=100, value=10, step=1)
-    selected_machine = st.selectbox("Select Machine", st.session_state['machines'].keys(), index=0)
-
-    if st.button("Run Gobuster Scan"):
-        if target_url and wordlist:
-            try:
-                cmd = ["gobuster", "dir", "-u", target_url, "-w", wordlist, "-t", str(threads)]
-                if extensions:
-                    cmd.extend(["-x", extensions])
-
-                with st.spinner("Running Gobuster Scan..."):
-                    result = subprocess.check_output(cmd, text=True)
-                clean_result = clean_ansi_codes(result)
-                st.text_area("Scan Results", clean_result, height=300)
-
-                if selected_machine in st.session_state['machines']:
-                    st.session_state['machines'][selected_machine]["Enumeration Results"] = \
-                        st.session_state['machines'][selected_machine].get("Enumeration Results", "") + \
-                        f"\n\nGobuster Results:\n{clean_result}"
-                    save_data_to_file()
-                    st.success(f"Results saved to {selected_machine}'s Enumeration Results.")
-            except Exception as e:
-                st.error(f"Error running Gobuster: {e}")
-        else:
-            st.error("Please provide both a Target URL and Wordlist Path.")
-
-
-elif menu == "Notes":
-    st.header("Machine Notes")
-
-    if st.session_state['machines']:
-        machine_selected = st.selectbox("Select Machine", st.session_state['machines'].keys())
-        notes = st.text_area("Notes", st.session_state['machines'].get(machine_selected, {}).get("Notes", ""))
-
-        if st.button("Save Notes"):
-            st.session_state['machines'][machine_selected]["Notes"] = notes
-            st.session_state['machines'][machine_selected]["Last Updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            save_data_to_file()
-            st.success("Notes saved.")
+def report_log(message, level="INFO"):
+    """
+    Logs a message to the Streamlit UI and appends it to the session report.
+    """
+    init_report()
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_msg = f"{timestamp} - {level.upper()} - {message}"
+    if level.upper() == "INFO":
+        st.write(log_msg)
+    elif level.upper() == "WARNING":
+        st.warning(log_msg)
+    elif level.upper() == "ERROR":
+        st.error(log_msg)
     else:
-        st.warning("No machines available. Please add a machine first.")
+        st.write(log_msg)
+    st.session_state["report"].append(log_msg)
 
-elif menu == "Enumeration Results":
-    st.header("Store Enumeration Results")
+# =============================================================================
+# Helper: Find Wordlists on the Local Machine
+# =============================================================================
+def find_wordlists(directory="/usr/share/dirb/wordlists"):
+    """
+    Searches for *.txt files in the specified directory.
+    Returns a list of file paths.
+    """
+    if os.path.isdir(directory):
+        return glob.glob(os.path.join(directory, "*.txt"))
+    return []
 
-    if st.session_state['machines']:
-        machine_selected = st.selectbox("Select Machine", st.session_state['machines'].keys())
-        enum_results = st.text_area("Enumeration Results", st.session_state['machines'].get(machine_selected, {}).get("Enumeration Results", ""))
+# =============================================================================
+# Module 1: Port Scanner
+# =============================================================================
+class PortScanner:
+    """
+    A basic multi-threaded TCP port scanner.
+    """
+    def __init__(self, target, ports):
+        self.target = target
+        self.ports = ports
+        self.open_ports = []
+        self.lock = threading.Lock()
 
-        if st.button("Save Results"):
-            st.session_state['machines'][machine_selected]["Enumeration Results"] = enum_results
-            st.session_state['machines'][machine_selected]["Last Updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            save_data_to_file()
-            st.success("Enumeration results saved.")
-
-        st.subheader("Saved Results")
-        if machine_selected in st.session_state['machines']:
-            st.text_area("Saved Enumeration Results", st.session_state['machines'][machine_selected].get("Enumeration Results", ""), height=300)
-    else:
-        st.warning("No machines available. Please add a machine first.")
-
-elif menu == "Automation Scripts":
-    st.header("Automation Scripts")
-
-    st.write("Run pre-configured scripts to automate repetitive tasks.")
-
-    script_options = ["Update System", "Run Enumeration", "Cleanup"]
-    selected_script = st.selectbox("Select Script", script_options)
-
-    if st.button("Run Script"):
+    def scan_port(self, port):
+        """
+        Attempts to connect to the given port. If successful, logs it as open.
+        """
         try:
-            if selected_script == "Update System":
-                result = subprocess.check_output(["sudo", "apt", "update", "&&", "sudo", "apt", "upgrade", "-y"], text=True)
-            elif selected_script == "Run Enumeration":
-                result = subprocess.check_output(["echo", "Enumeration Script Placeholder"], text=True)
-            elif selected_script == "Cleanup":
-                result = subprocess.check_output(["echo", "Cleanup Script Placeholder"], text=True)
-            st.text_area("Script Output", result, height=300)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                result = s.connect_ex((self.target, port))
+                if result == 0:
+                    with self.lock:
+                        self.open_ports.append(port)
+                    report_log(f"Port {port} is open.", "INFO")
         except Exception as e:
-            st.error(f"Error running script: {e}")
+            report_log(f"Error scanning port {port}: {e}", "DEBUG")
 
-elif menu == "Export Data":
-    st.header("Export Data")
+    def run_scan(self):
+        """
+        Runs the port scan using threads.
+        """
+        report_log(f"Starting port scan on {self.target} for ports: {self.ports}", "INFO")
+        threads = []
+        for port in self.ports:
+            t = threading.Thread(target=self.scan_port, args=(port,))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+        report_log(f"Port scan complete. Open ports: {self.open_ports}", "INFO")
+        return self.open_ports
 
-    st.write("Export all machine data as a JSON file.")
+# =============================================================================
+# Module 2: Service Enumeration
+# =============================================================================
+class ServiceEnumerator:
+    """
+    Grabs service banners and, if applicable, performs HTTP enumeration.
+    """
+    def __init__(self, target, port):
+        self.target = target
+        self.port = port
 
-    if st.button("Export"):
-        with open("exported_data.json", "w") as file:
-            json.dump(st.session_state['machines'], file)
-        with open("exported_data.json", "rb") as file:
-            st.download_button("Download JSON File", file, "machines_data.json", "application/json")
-            st.success("Data exported successfully.")
+    def banner_grab(self):
+        """
+        Attempts to grab the banner from the target service.
+        """
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(3)
+                s.connect((self.target, self.port))
+                banner = s.recv(1024)
+                if banner:
+                    decoded_banner = banner.decode(errors='ignore').strip()
+                    report_log(f"Banner for port {self.port}: {decoded_banner}", "INFO")
+                    return decoded_banner
+                else:
+                    report_log(f"No banner received on port {self.port}.", "INFO")
+                    return ""
+        except Exception as e:
+            report_log(f"Error grabbing banner on port {self.port}: {e}", "WARNING")
+            return ""
 
-elif menu == "Save HTML Report":
-    st.header("Save HTML Report")
+    def http_enum(self):
+        """
+        If the service appears to be HTTP, collects headers and a content snippet.
+        """
+        try:
+            url = f"http://{self.target}:{self.port}"
+            response = requests.get(url, timeout=5)
+            headers = response.headers
+            status = response.status_code
+            snippet = response.text[:200]
+            report_log(f"HTTP enumeration on port {self.port} succeeded (status {status}).", "INFO")
+            report_log(f"HTTP Headers: {headers}", "INFO")
+            report_log(f"HTTP Content Snippet: {snippet}", "INFO")
+            return headers, status, snippet
+        except Exception as e:
+            report_log(f"HTTP enumeration failed on port {self.port}: {e}", "WARNING")
+            return None
 
-    st.write("Generate and save an HTML report for all machines.")
+# =============================================================================
+# Module 3: Exploitation (Sample/Demo)
+# =============================================================================
+class Exploiter:
+    """
+    A sample exploitation module that simulates attacking a vulnerable web endpoint.
+    """
+    def __init__(self, target, port):
+        self.target = target
+        self.port = port
 
-    if st.button("Generate Report"):
-        html_report = generate_html_report()
-        with open("htb_report.html", "w") as file:
-            file.write(html_report)
-        with open("htb_report.html", "rb") as file:
-            st.download_button("Download HTML Report", file, "htb_report.html", "text/html")
-            st.success("HTML report generated and saved successfully.")
+    def simple_exploit(self):
+        """
+        A dummy exploit that posts a payload to a presumed vulnerable endpoint.
+        """
+        report_log(f"Attempting a sample exploit on {self.target}:{self.port}", "INFO")
+        try:
+            url = f"http://{self.target}:{self.port}/vulnerable_endpoint"
+            payload = {"input": "' OR '1'='1"}
+            response = requests.post(url, data=payload, timeout=5)
+            if "Welcome" in response.text:
+                report_log("Exploit appears to be successful!", "INFO")
+                return True, "Exploit successful: Received positive response."
+            else:
+                report_log("Exploit did not work on the target.", "INFO")
+                return False, "Exploit failed: Response did not indicate success."
+        except Exception as e:
+            report_log(f"Exploit error: {e}", "ERROR")
+            return False, f"Exploit error: {e}"
+
+# =============================================================================
+# Module 4: Pentest Tool Wrapper with Branching Logic
+# =============================================================================
+class PentestTool:
+    """
+    The main pentesting framework tying all modules together.
+    """
+    def __init__(self, target):
+        self.target = target
+
+    def run_scan(self, ports):
+        scanner = PortScanner(self.target, ports)
+        return scanner.run_scan()
+
+    def enumerate_service(self, port):
+        """
+        Runs manual enumeration for a given port.
+        """
+        enumerator = ServiceEnumerator(self.target, port)
+        banner = enumerator.banner_grab()
+        extra_info = ""
+        if port in (80, 8080, 8000):
+            http_info = enumerator.http_enum()
+            if http_info:
+                headers, status, snippet = http_info
+                extra_info = f"HTTP Status: {status}"
+        elif port == 22:
+            if banner and "SSH" in banner:
+                extra_info = "SSH service detected."
+            else:
+                extra_info = "SSH service suspected but banner unclear."
+        elif port == 21:
+            if banner and "FTP" in banner:
+                extra_info = "FTP service detected."
+            else:
+                extra_info = "FTP service suspected but banner unclear."
+        else:
+            extra_info = "Generic service or no additional data."
+        return banner, extra_info
+
+    def auto_scan_and_enumerate(self, ports):
+        """
+        Performs a port scan and then automatically enumerates each open port using
+        branching logic based on the service type.
+        Returns a dictionary with details per open port.
+        """
+        open_ports = self.run_scan(ports)
+        results = {}
+        for port in open_ports:
+            enumerator = ServiceEnumerator(self.target, port)
+            banner = enumerator.banner_grab()
+            service = "Generic"
+            extra_info = ""
+            if port in (80, 8080, 8000):
+                service = "HTTP"
+                http_info = enumerator.http_enum()
+                if http_info:
+                    headers, status, snippet = http_info
+                    extra_info = f"HTTP Status: {status}, Headers: {headers}, Snippet: {snippet[:50]}..."
+            elif port == 22:
+                service = "SSH"
+                if banner and "SSH" in banner:
+                    extra_info = f"SSH service detected. Banner: {banner}"
+                else:
+                    extra_info = "SSH service suspected but banner unclear."
+            elif port == 21:
+                service = "FTP"
+                if banner and "FTP" in banner:
+                    extra_info = f"FTP service detected. Banner: {banner}"
+                else:
+                    extra_info = "FTP service suspected but banner unclear."
+            else:
+                extra_info = "No additional enumeration performed."
+            results[port] = {
+                "banner": banner,
+                "service": service,
+                "extra_info": extra_info
+            }
+        return open_ports, results
+
+    def run_exploit(self, port):
+        exploiter = Exploiter(self.target, port)
+        success, message = exploiter.simple_exploit()
+        report_log(f"Exploit result: {message}", "INFO")
+        return success
+
+# =============================================================================
+# Additional Functionality 1: DNS & Subdomain Enumeration
+# =============================================================================
+def dns_enumeration(domain):
+    """
+    Performs DNS record enumeration (A, MX, NS, TXT) for the given domain.
+    """
+    records = {}
+    for record_type in ['A', 'MX', 'NS', 'TXT']:
+        try:
+            answers = dns.resolver.resolve(domain, record_type)
+            records[record_type] = [rdata.to_text() for rdata in answers]
+            report_log(f"{record_type} records for {domain}: {records[record_type]}", "INFO")
+        except Exception as e:
+            records[record_type] = f"Error: {e}"
+            report_log(f"Error retrieving {record_type} records for {domain}: {e}", "WARNING")
+    return records
+
+def subdomain_enumeration(domain, subdomains):
+    """
+    Attempts to resolve subdomains by prepending entries from a list to the domain.
+    """
+    found = {}
+    for sub in subdomains:
+        candidate = f"{sub.strip()}.{domain}"
+        try:
+            answers = dns.resolver.resolve(candidate, 'A')
+            ips = [rdata.to_text() for rdata in answers]
+            found[candidate] = ips
+            report_log(f"Subdomain found: {candidate} -> {ips}", "INFO")
+        except Exception as e:
+            # Ignore non-resolving subdomains silently.
+            pass
+    return found
+
+# =============================================================================
+# Additional Functionality 2: SSL/TLS Analysis
+# =============================================================================
+def ssl_analysis(target, port):
+    """
+    Connects to a target and returns its SSL/TLS certificate details.
+    """
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((target, port), timeout=5) as sock:
+            with context.wrap_socket(sock, server_hostname=target) as ssock:
+                cert = ssock.getpeercert()
+                report_log(f"SSL certificate for {target}:{port} retrieved.", "INFO")
+                return cert
+    except Exception as e:
+        report_log(f"SSL analysis failed for {target}:{port}: {e}", "ERROR")
+        return f"Error: {e}"
+
+# =============================================================================
+# Additional Functionality 3: Web Directory Enumeration
+# =============================================================================
+def directory_enumeration(target, port, paths):
+    """
+    Attempts to enumerate directories on a web server using a provided list of paths.
+    """
+    found_paths = {}
+    for path in paths:
+        url = f"http://{target}:{port}/{path.strip()}"
+        try:
+            r = requests.get(url, timeout=3)
+            if r.status_code in [200, 403]:
+                found_paths[url] = r.status_code
+                report_log(f"Directory found: {url} (Status: {r.status_code})", "INFO")
+        except Exception as e:
+            pass
+    return found_paths
+
+# =============================================================================
+# Helper Function: Parse Port Input
+# =============================================================================
+def parse_ports(ports_str):
+    """
+    Parses a port specification string.
+    Accepts ranges (e.g. "20-1024") or comma-separated lists (e.g. "22,80,443").
+    """
+    ports = []
+    if "-" in ports_str:
+        try:
+            start, end = ports_str.split("-")
+            ports = list(range(int(start), int(end) + 1))
+        except ValueError:
+            report_log("Invalid port range format. Use something like '20-1024'.", "ERROR")
+    elif "," in ports_str:
+        try:
+            ports = [int(p.strip()) for p in ports_str.split(",")]
+        except ValueError:
+            report_log("Invalid comma-separated port list.", "ERROR")
+    else:
+        try:
+            ports = [int(ports_str)]
+        except ValueError:
+            report_log("Port must be an integer.", "ERROR")
+    return ports
+
+# =============================================================================
+# Streamlit UI Layout
+# =============================================================================
+def main():
+    st.set_page_config(page_title="Pentest Tool", layout="wide")
+    st.title("Advanced Educational Pentest Tool with Extended Functionality")
+    st.write("**Use responsibly on authorized systems only.**")
+
+    # Initialize report if not already done
+    init_report()
+
+    # Sidebar: Global Settings for primary scanning and target info
+    st.sidebar.header("Target & Settings")
+    target = st.sidebar.text_input("Target IP/Domain", value="10.10.10.10")
+    ports_input = st.sidebar.text_input("Ports (range or comma-separated)", value="20-1024")
+
+    # Create an instance of the pentest tool for the given target
+    tool = PentestTool(target)
+
+    # Define tabs for the various functionalities
+    tab_auto, tab_manual, tab_exploit, tab_dns, tab_ssl, tab_dir, tab_report = st.tabs([
+        "Combined Scan & Auto-Enumeration",
+        "Manual Service Enumeration",
+        "Exploitation",
+        "DNS & Subdomain Enumeration",
+        "SSL/TLS Analysis",
+        "Directory Enumeration",
+        "Report"
+    ])
+
+    # ---------------------
+    # Tab 1: Combined Scan & Auto-Enumeration
+    # ---------------------
+    with tab_auto:
+        st.header("Combined Scan & Auto-Enumeration")
+        if st.button("Run Combined Scan & Auto-Enumeration"):
+            ports = parse_ports(ports_input)
+            if ports:
+                with st.spinner("Scanning and enumerating services..."):
+                    open_ports, enum_results = tool.auto_scan_and_enumerate(ports)
+                    st.success(f"Scan complete. Open ports: {open_ports}")
+                    # Display results in a table
+                    data = []
+                    for port, details in enum_results.items():
+                        data.append({
+                            "Port": port,
+                            "Service": details["service"],
+                            "Banner": details["banner"],
+                            "Additional Info": details["extra_info"]
+                        })
+                    df = pd.DataFrame(data)
+                    st.dataframe(df)
+            else:
+                st.error("No valid ports provided for scanning.")
+
+    # ---------------------
+    # Tab 2: Manual Service Enumeration
+    # ---------------------
+    with tab_manual:
+        st.header("Manual Service Enumeration")
+        enum_port = st.number_input("Port to enumerate", min_value=1, max_value=65535, value=80)
+        if st.button("Run Manual Enumeration"):
+            with st.spinner(f"Enumerating service on port {enum_port}..."):
+                banner, extra_info = tool.enumerate_service(enum_port)
+                st.info(f"Banner: {banner}")
+                st.info(f"Additional Info: {extra_info}")
+
+    # ---------------------
+    # Tab 3: Exploitation
+    # ---------------------
+    with tab_exploit:
+        st.header("Exploitation")
+        exploit_port = st.number_input("Port to exploit", min_value=1, max_value=65535, value=80, key="exploit_port")
+        if st.button("Run Exploit"):
+            with st.spinner(f"Running exploit on port {exploit_port}..."):
+                success = tool.run_exploit(exploit_port)
+                if success:
+                    st.success("Exploit appears to be successful!")
+                else:
+                    st.error("Exploit did not succeed.")
+
+    # ---------------------
+    # Tab 4: DNS & Subdomain Enumeration
+    # ---------------------
+    with tab_dns:
+        st.header("DNS & Subdomain Enumeration")
+        dns_domain = st.text_input("Domain for DNS Enumeration", value="example.com", key="dns_domain")
+        # Attempt to find wordlists on the system
+        sub_wordlists = find_wordlists("/usr/share/dirb/wordlists")
+        if sub_wordlists:
+            selected_sub_wordlist = st.selectbox("Select Subdomain Wordlist", options=sub_wordlists)
+            try:
+                with open(selected_sub_wordlist, "r") as f:
+                    subdomains = [line.strip() for line in f if line.strip()]
+                st.info(f"Loaded {len(subdomains)} subdomains from {selected_sub_wordlist}")
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
+                subdomains = []
+        else:
+            sub_wordlist_input = st.text_area("Subdomain Wordlist (one per line)",
+                                              value="www\nmail\nftp\nblog\nadmin", height=150)
+            subdomains = [line.strip() for line in sub_wordlist_input.splitlines() if line.strip()]
+
+        if st.button("Run DNS & Subdomain Enumeration"):
+            with st.spinner("Enumerating DNS records..."):
+                dns_results = dns_enumeration(dns_domain)
+            st.subheader("DNS Records")
+            st.write(dns_results)
+            if subdomains:
+                with st.spinner("Enumerating Subdomains..."):
+                    sub_results = subdomain_enumeration(dns_domain, subdomains)
+                st.subheader("Subdomains Found")
+                if sub_results:
+                    st.write(sub_results)
+                else:
+                    st.write("No subdomains found from the wordlist.")
+
+    # ---------------------
+    # Tab 5: SSL/TLS Analysis
+    # ---------------------
+    with tab_ssl:
+        st.header("SSL/TLS Analysis")
+        ssl_target = st.text_input("Target for SSL Analysis", value=target, key="ssl_target")
+        ssl_port = st.number_input("SSL Port", min_value=1, max_value=65535, value=443, key="ssl_port")
+        if st.button("Run SSL/TLS Analysis"):
+            with st.spinner("Analyzing SSL/TLS certificate..."):
+                cert = ssl_analysis(ssl_target, ssl_port)
+            st.subheader("Certificate Details")
+            if isinstance(cert, dict):
+                st.json(cert)
+            else:
+                st.error(cert)
+
+    # ---------------------
+    # Tab 6: Directory Enumeration
+    # ---------------------
+    with tab_dir:
+        st.header("Web Directory Enumeration")
+        dir_target = st.text_input("Web Target", value=target, key="dir_target")
+        dir_port = st.number_input("Web Port", min_value=1, max_value=65535, value=80, key="dir_port")
+        # Attempt to find wordlists for directories
+        dir_wordlists = find_wordlists("/usr/share/dirb/wordlists")
+        if dir_wordlists:
+            selected_dir_wordlist = st.selectbox("Select Directory Wordlist", options=dir_wordlists)
+            try:
+                with open(selected_dir_wordlist, "r") as f:
+                    dir_paths = [line.strip() for line in f if line.strip()]
+                st.info(f"Loaded {len(dir_paths)} paths from {selected_dir_wordlist}")
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
+                dir_paths = []
+        else:
+            default_dirs = "admin\nlogin\ndashboard\nconfig\nuploads\nimages"
+            dir_wordlist_input = st.text_area("Directories to Check (one per line)", value=default_dirs, height=150)
+            dir_paths = [line.strip() for line in dir_wordlist_input.splitlines() if line.strip()]
+
+        if st.button("Run Directory Enumeration"):
+            with st.spinner("Enumerating directories..."):
+                found = directory_enumeration(dir_target, dir_port, dir_paths)
+            st.subheader("Directories Found")
+            if found:
+                st.write(found)
+            else:
+                st.write("No directories found or accessible.")
+
+    # ---------------------
+    # Tab 7: Report & Download
+    # ---------------------
+    with tab_report:
+        st.header("Execution Report")
+        report_text = "\n".join(st.session_state["report"])
+        st.text_area("Report Log", report_text, height=400)
+        if st.button("Clear Report"):
+            st.session_state["report"] = []
+            st.experimental_rerun()
+        st.download_button(
+            label="Download Report",
+            data=report_text,
+            file_name="pentest_report.txt",
+            mime="text/plain"
+        )
+
+if __name__ == "__main__":
+    main()
