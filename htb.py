@@ -8,6 +8,8 @@ import ssl
 import dns.resolver  # Requires dnspython: pip install dnspython
 import os
 import glob
+import subprocess
+import re
 
 # =============================================================================
 # Utility: Reporting Functionality
@@ -46,47 +48,89 @@ def find_wordlists(directory="/usr/share/dirb/wordlists"):
     return []
 
 # =============================================================================
-# Module 1: Port Scanner
+# Module 1: Port Scanner (Using Nmap)
 # =============================================================================
 class PortScanner:
     """
-    A basic multi-threaded TCP port scanner.
+    A port scanner that uses Nmap.
     """
-    def __init__(self, target, ports):
+    def __init__(self, target, ports, nmap_option="Default"):
         self.target = target
         self.ports = ports
+        self.nmap_option = nmap_option
         self.open_ports = []
-        self.lock = threading.Lock()
 
-    def scan_port(self, port):
-        """
-        Attempts to connect to the given port. If successful, logs it as open.
-        """
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                result = s.connect_ex((self.target, port))
-                if result == 0:
-                    with self.lock:
-                        self.open_ports.append(port)
-                    report_log(f"Port {port} is open.", "INFO")
-        except Exception as e:
-            report_log(f"Error scanning port {port}: {e}", "DEBUG")
+def run_scan(self):
+    """
+    Runs Nmap with the specified options to scan the provided ports.
 
-    def run_scan(self):
-        """
-        Runs the port scan using threads.
-        """
-        report_log(f"Starting port scan on {self.target} for ports: {self.ports}", "INFO")
-        threads = []
-        for port in self.ports:
-            t = threading.Thread(target=self.scan_port, args=(port,))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
-        report_log(f"Port scan complete. Open ports: {self.open_ports}", "INFO")
-        return self.open_ports
+    Returns:
+        list: A list of open ports found in the scan.
+    """
+    # Validate ports list
+    if not self.ports:
+        report_log("No ports specified for scan.", "ERROR")
+        return []
+
+    # Convert ports list to a comma-separated string
+    ports_str = ",".join(map(str, self.ports))
+    
+    # Base command for Nmap
+    cmd = ["nmap"]
+    
+    # Dictionary mapping nmap options to their respective flags
+    option_flags = {
+        "Quick Comprehensive Scan": ["-T4", "-F", "-sV", "-sC"],
+        "Service Version": ["-sC", "-sV"],
+        "Aggressive": ["-A"],
+        # "Default" option does not add any extra flags
+    }
+    
+    # Add flags based on the selected nmap option
+    if self.nmap_option in option_flags:
+        cmd.extend(option_flags[self.nmap_option])
+    else:
+        if self.nmap_option != "Default":
+            report_log(f"Unrecognized nmap option '{self.nmap_option}', proceeding with default scan.", "WARNING")
+    
+    # Append port and target parameters to the command
+    cmd.extend(["-p", ports_str, self.target])
+    report_log(f"Running Nmap command: {' '.join(cmd)}", "INFO")
+    
+    try:
+        # Set a timeout to avoid indefinite hanging (adjust timeout as needed)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired as e:
+        report_log(f"Nmap scan timed out: {e}", "ERROR")
+        return []
+    except Exception as e:
+        report_log(f"Error running Nmap: {e}", "ERROR")
+        return []
+    
+    # Check the return code.
+    # Note: Nmap may return 1 when no hosts are up; that isn't always an error.
+    if result.returncode not in [0, 1]:
+        report_log(f"Nmap returned exit code {result.returncode}. Stderr: {result.stderr}", "WARNING")
+    
+    # Log the Nmap standard output for debugging purposes
+    output = result.stdout
+    report_log(f"Nmap output:\n{output}", "DEBUG")
+    
+    # Parse the Nmap output to extract open TCP ports.
+    # This regex looks for lines like "22/tcp  open  ssh"
+    open_ports = []
+    pattern = re.compile(r"(\d+)/tcp\s+open")
+    for line in output.splitlines():
+        match = pattern.search(line)
+        if match:
+            port = int(match.group(1))
+            open_ports.append(port)
+    
+    # Save the discovered open ports for later use
+    self.open_ports = open_ports
+    report_log(f"Open ports from Nmap: {self.open_ports}", "INFO")
+    
+    return self.open_ports
 
 # =============================================================================
 # Module 2: Service Enumeration
@@ -177,8 +221,8 @@ class PentestTool:
     def __init__(self, target):
         self.target = target
 
-    def run_scan(self, ports):
-        scanner = PortScanner(self.target, ports)
+    def run_scan(self, ports, nmap_option="Default"):
+        scanner = PortScanner(self.target, ports, nmap_option)
         return scanner.run_scan()
 
     def enumerate_service(self, port):
@@ -207,13 +251,13 @@ class PentestTool:
             extra_info = "Generic service or no additional data."
         return banner, extra_info
 
-    def auto_scan_and_enumerate(self, ports):
+    def auto_scan_and_enumerate(self, ports, nmap_option="Default"):
         """
-        Performs a port scan and then automatically enumerates each open port using
+        Performs a port scan (using Nmap) and then automatically enumerates each open port using
         branching logic based on the service type.
         Returns a dictionary with details per open port.
         """
-        open_ports = self.run_scan(ports)
+        open_ports = self.run_scan(ports, nmap_option)
         results = {}
         for port in open_ports:
             enumerator = ServiceEnumerator(self.target, port)
@@ -352,25 +396,25 @@ def parse_ports(ports_str):
             report_log("Port must be an integer.", "ERROR")
     return ports
 
-# =============================================================================
-# Streamlit UI Layout
-# =============================================================================
 def main():
     st.set_page_config(page_title="Pentest Tool", layout="wide")
     st.title("Advanced Educational Pentest Tool with Extended Functionality")
     st.write("**Use responsibly on authorized systems only.**")
-
-    # Initialize report if not already done
+    
+    # Initialize report state and logging if not already done
+    if "report" not in st.session_state:
+        st.session_state["report"] = []
     init_report()
-
+    
     # Sidebar: Global Settings for primary scanning and target info
     st.sidebar.header("Target & Settings")
     target = st.sidebar.text_input("Target IP/Domain", value="10.10.10.10")
     ports_input = st.sidebar.text_input("Ports (range or comma-separated)", value="20-1024")
-
-    # Create an instance of the pentest tool for the given target
+    
+    # Create an instance of the pentest tool for the given target.
+    # Ensure that PentestTool.__init__ accepts the target and initializes the attributes.
     tool = PentestTool(target)
-
+    
     # Define tabs for the various functionalities
     tab_auto, tab_manual, tab_exploit, tab_dns, tab_ssl, tab_dir, tab_report = st.tabs([
         "Combined Scan & Auto-Enumeration",
@@ -381,32 +425,56 @@ def main():
         "Directory Enumeration",
         "Report"
     ])
-
+    
     # ---------------------
     # Tab 1: Combined Scan & Auto-Enumeration
     # ---------------------
     with tab_auto:
         st.header("Combined Scan & Auto-Enumeration")
+        # Provide a dropdown for selecting the Nmap scan option
+        nmap_option = st.selectbox(
+            "Select Nmap Scan Option",
+            options=["Default", "Quick Scan", "Service Version", "Aggressive"]
+        )
         if st.button("Run Combined Scan & Auto-Enumeration"):
             ports = parse_ports(ports_input)
             if ports:
+                # Set instance attributes for the scan.
+                tool.ports = ports
+                tool.nmap_option = nmap_option
+                
                 with st.spinner("Scanning and enumerating services..."):
-                    open_ports, enum_results = tool.auto_scan_and_enumerate(ports)
-                    st.success(f"Scan complete. Open ports: {open_ports}")
-                    # Display results in a table
-                    data = []
-                    for port, details in enum_results.items():
-                        data.append({
-                            "Port": port,
-                            "Service": details["service"],
-                            "Banner": details["banner"],
-                            "Additional Info": details["extra_info"]
-                        })
-                    df = pd.DataFrame(data)
-                    st.dataframe(df)
+                    # Call run_scan() which returns a list of open ports.
+                    open_ports = tool.run_scan()
+                    
+                    if not open_ports:
+                        st.info("No open ports were found.")
+                    else:
+                        # For each open port, run the manual enumeration.
+                        enum_results = {}
+                        for port in open_ports:
+                            banner, extra_info = tool.enumerate_service(port)
+                            enum_results[port] = {
+                                "service": "Unknown",  # Update if you add service detection logic.
+                                "banner": banner,
+                                "extra_info": extra_info
+                            }
+                        st.success(f"Scan complete. Open ports: {open_ports}")
+                        
+                        # Display results in a table
+                        data = []
+                        for port, details in enum_results.items():
+                            data.append({
+                                "Port": port,
+                                "Service": details["service"],
+                                "Banner": details["banner"],
+                                "Additional Info": details["extra_info"]
+                            })
+                        df = pd.DataFrame(data)
+                        st.dataframe(df)
             else:
                 st.error("No valid ports provided for scanning.")
-
+    
     # ---------------------
     # Tab 2: Manual Service Enumeration
     # ---------------------
@@ -418,7 +486,7 @@ def main():
                 banner, extra_info = tool.enumerate_service(enum_port)
                 st.info(f"Banner: {banner}")
                 st.info(f"Additional Info: {extra_info}")
-
+    
     # ---------------------
     # Tab 3: Exploitation
     # ---------------------
@@ -432,7 +500,7 @@ def main():
                     st.success("Exploit appears to be successful!")
                 else:
                     st.error("Exploit did not succeed.")
-
+    
     # ---------------------
     # Tab 4: DNS & Subdomain Enumeration
     # ---------------------
@@ -454,7 +522,7 @@ def main():
             sub_wordlist_input = st.text_area("Subdomain Wordlist (one per line)",
                                               value="www\nmail\nftp\nblog\nadmin", height=150)
             subdomains = [line.strip() for line in sub_wordlist_input.splitlines() if line.strip()]
-
+    
         if st.button("Run DNS & Subdomain Enumeration"):
             with st.spinner("Enumerating DNS records..."):
                 dns_results = dns_enumeration(dns_domain)
@@ -468,7 +536,7 @@ def main():
                     st.write(sub_results)
                 else:
                     st.write("No subdomains found from the wordlist.")
-
+    
     # ---------------------
     # Tab 5: SSL/TLS Analysis
     # ---------------------
@@ -484,7 +552,7 @@ def main():
                 st.json(cert)
             else:
                 st.error(cert)
-
+    
     # ---------------------
     # Tab 6: Directory Enumeration
     # ---------------------
@@ -507,7 +575,7 @@ def main():
             default_dirs = "admin\nlogin\ndashboard\nconfig\nuploads\nimages"
             dir_wordlist_input = st.text_area("Directories to Check (one per line)", value=default_dirs, height=150)
             dir_paths = [line.strip() for line in dir_wordlist_input.splitlines() if line.strip()]
-
+    
         if st.button("Run Directory Enumeration"):
             with st.spinner("Enumerating directories..."):
                 found = directory_enumeration(dir_target, dir_port, dir_paths)
@@ -516,7 +584,7 @@ def main():
                 st.write(found)
             else:
                 st.write("No directories found or accessible.")
-
+    
     # ---------------------
     # Tab 7: Report & Download
     # ---------------------
@@ -533,6 +601,6 @@ def main():
             file_name="pentest_report.txt",
             mime="text/plain"
         )
-
+    
 if __name__ == "__main__":
     main()
